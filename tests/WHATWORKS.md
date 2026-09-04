@@ -208,6 +208,7 @@ Organized in `apps/standalone/` folders:
 | validators/validators_test | WORKS | 6/6 | Input validation (KiCad dialog validators) |
 | ownerdrawn/ownerdrawn_test | WORKS | 5/5 | Custom dropdown rendering (layer selectors) |
 | popup/popup_test | WORKS | 6/6 | Transient popups (toolbar palettes) |
+| combopopup/combopopup_test | WORKS | 4/4 | wxComboCtrl custom popup + wxListBox click contract (KiCad net/footprint filter dropdowns) |
 | xml/xml_test | WORKS | 6/6 | XML parsing (config/project files) |
 | wasmedge/wasmedge_test | WORKS | 8/8 | WASM edge cases (file system, threading, fonts) |
 | fontenum/fontenum_test | WORKS | 1/1 | Font enumeration via Local Font Access API |

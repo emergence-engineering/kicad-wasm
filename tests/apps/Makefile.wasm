@@ -176,6 +176,7 @@ all: minimal_test.html \
      $(S)/aui/aui_test.html \
      $(S)/toolbar/toolbar_test.html \
      $(S)/secondary-frame/secondary-frame_test.html \
+     $(S)/combopopup/combopopup_test.html \
      $(S)/grid/grid_test.html \
      $(S)/dialog/dialog_test.html \
      $(S)/timer/timer_test.html \
@@ -397,6 +398,15 @@ $(S)/secondary-frame/secondary-frame_test.html: $(S)/secondary-frame/secondary-f
 	$(CXX) $< $(LDFLAGS_NOGL) --pre-js $(JS) --shell-file $(HTML) -o $@
 
 secondary-frame: $(S)/secondary-frame/secondary-frame_test.html
+
+# wxComboCtrl custom popup + wxListBox click contract (no GL)
+$(S)/combopopup/combopopup_test.o: $(S)/combopopup/combopopup_test.cpp
+	$(CXX) -c $(CXXFLAGS) $< -o $@
+
+$(S)/combopopup/combopopup_test.html: $(S)/combopopup/combopopup_test.o $(WX_CORE_LIB) $(JS_FILES)
+	$(CXX) $< $(LDFLAGS_NOGL) --pre-js $(JS) --shell-file $(HTML) -o $@
+
+combopopup: $(S)/combopopup/combopopup_test.html
 
 # Grid test (no GL)
 $(S)/grid/grid_test.o: $(S)/grid/grid_test.cpp
