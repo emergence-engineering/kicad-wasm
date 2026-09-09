@@ -425,8 +425,8 @@ std::string blobForItem( BOARD* aBoard, BOARD_ITEM* aItem )
         // (the wire carries absolute positions) and minus SetNetCode(0): zeroing pad
         // nets is a paste-into-FOREIGN-board safety, but collab peers edit the SAME
         // board — nets must survive the wire. KiCad 10 formats pad nets by NAME and
-        // the parser resolves by name against the receiver's board (creating the net
-        // if missing), so no code remapping is needed on apply.
+        // makeFromBlob parses them in a temporary board, then maps them by name
+        // onto the receiver's board (creating any missing nets).
         //
         // NOTE: unlike SaveSelection we do NOT SetLocked( false ) — `(locked yes)` is
         // real file content and dropping it would drift against the save.
@@ -455,57 +455,25 @@ std::string blobForItem( BOARD* aBoard, BOARD_ITEM* aItem )
     return wrapInBoardEnvelope( *aBoard, body );
 }
 
-// A bare `(footprint …)` blob carries no `(version …)`, but the parser NEEDS one: it starts at
-// m_requiredVersion = 0, and several format decisions are gated on it — most visibly
-// `if( m_requiredVersion < 20230620 ) field->SetVisible( false )` in the T_property case
-// (pcb_io_kicad_sexpr_parser.cpp), which silently stamps `(hide yes)` onto every mandatory
-// field of an applied footprint.
-//
-// The clipboard dialect got this for free because CTL_FOR_CLIPBOARD emits the version INSIDE
-// the footprint form — but that token is not valid board-file content (see blobForItem), so we
-// can't keep it in the Y.Doc. Instead re-supply it here, at parse time only: splice
-// `(version N)` in right after `(footprint "<lib id>"`, which is exactly where the clipboard
-// writer put it. The Y.Doc body stays byte-identical to the file; only the wire→model decode
-// sees the token.
-static std::string withFootprintVersion( const std::string& aBlob )
-{
-    static const std::string kHead = "(footprint";
-
-    if( aBlob.compare( 0, kHead.size(), kHead ) != 0 )
-        return aBlob;                       // envelope blob — its (kicad_pcb …) carries a version
-
-    if( aBlob.find( "(version " ) != std::string::npos )
-        return aBlob;                       // already versioned (older peer, clipboard dialect)
-
-    // Skip the quoted lib id that follows the head keyword, then inject.
-    size_t open = aBlob.find( '"', kHead.size() );
-
-    if( open == std::string::npos )
-        return aBlob;
-
-    size_t close = open + 1;
-
-    while( close < aBlob.size() && aBlob[close] != '"' )
-        close += ( aBlob[close] == '\\' ) ? 2 : 1;
-
-    if( close >= aBlob.size() )
-        return aBlob;
-
-    return aBlob.substr( 0, close + 1 )
-           + " (version " + std::to_string( SEXPR_BOARD_FILE_VERSION ) + ")"
-           + aBlob.substr( close + 1 );
-}
-
-// Reconstruct a board item from a wire blob. Parse() returns a bare FOOTPRINT*, or a BOARD*
-// (the `(kicad_pcb …)` envelope) holding the single item — in which case detach that item from
-// the throw-away board and hand back ownership. Returns nullptr on a parse failure (Parse catches
-// internally) or if no item is found. Runs inside the apply COROUTINE.
+// Reconstruct a board item in a temporary BOARD, remap its nets, and detach it.
+// Returns nullptr on a parse failure or if no item is found. Runs inside the apply COROUTINE.
 BOARD_ITEM* makeFromBlob( BOARD& aBoard, const std::string& aBlobIn )
 {
     if( aBlobIn.empty() )
         return nullptr;
 
-    const std::string aBlob = withFootprintVersion( aBlobIn );
+    // PCB_IO_KICAD_SEXPR::Parse constructs its parser with a NULL board, regardless
+    // of io.SetBoard(). A bare footprint is therefore parsed as a library item:
+    // pad net names are ignored and the footprint is unlocked. Every remote move
+    // replaces the footprint, so this used to erase its connections on the peer.
+    // Use the board envelope for footprints too. It supplies the format version
+    // (including field-visibility rules) and a net table, then MapNets below binds
+    // the pads to the live board by name. The wire/Y.Doc stays in board-file form.
+    const size_t first = aBlobIn.find_first_not_of( " \t\r\n" );
+    const std::string aBlob = first != std::string::npos
+                                     && aBlobIn.compare( first, 10, "(footprint" ) == 0
+                             ? wrapInBoardEnvelope( aBoard, aBlobIn )
+                             : aBlobIn;
 
     CLIPBOARD_IO io;
     io.SetBoard( &aBoard );
@@ -556,6 +524,15 @@ BOARD_ITEM* makeFromBlob( BOARD& aBoard, const std::string& aBlobIn )
         // here is what trapped via add ("index out of bounds") and tripped the zone undo assert.
         found->SetParent( &aBoard );
         found->SetParentGroup( nullptr );
+
+        if( FOOTPRINT* fp = dynamic_cast<FOOTPRINT*>( found ) )
+        {
+            // Component classes also belong to the temporary board. Resolve the
+            // parsed names against the destination before that board is freed,
+            // just as PCB_CONTROL's native clipboard import does.
+            fp->ResolveComponentClassNames( &aBoard, fp->GetTransientComponentClassNames() );
+            fp->ClearTransientComponentClassNames();
+        }
     }
 
     delete clip;

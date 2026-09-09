@@ -202,6 +202,63 @@ test.describe("pcbnew ysync repros (v2 items wire, single tab)", () => {
     expect(hasAbort(testLogger), "no WASM abort").toBe(false);
   });
 
+  test("remote footprint move preserves both pads' nets on the receiver", async ({
+    page,
+    testLogger,
+  }) => {
+    await bootOpen(page);
+    const original = await fp1Blob(page);
+    expect(original.match(/\(net (?:1 )?"SIG"\)/g)).toHaveLength(2);
+
+    // A v2 move replaces the whole footprint with a bare board-writer blob.
+    // Checking only the outgoing blob missed the receiver parsing it without
+    // a board context and silently dropping every pad's net assignment.
+    const moved = original.replace(/\(at 100 100(?: 0)?\)/, "(at 105 100)");
+    expect(moved).not.toBe(original);
+    await page.evaluate((sexpr) => {
+      window.Module.kicadCollabApplyItems(
+        JSON.stringify({ added: [], changed: [{ sexpr }], removed: [] }),
+      );
+    }, moved);
+    await expect
+      .poll(() => fp1Blob(page), { timeout: 25000, intervals: [400] })
+      .toContain("(at 105 100)");
+
+    const received = await fp1Blob(page);
+    expect(received).toContain(PAD1);
+    expect(received).toContain(PAD2);
+    expect(received.match(/\(net (?:1 )?"SIG"\)/g) ?? []).toHaveLength(2);
+    expect((await saveRead(page)).match(/\(net (?:1 )?"SIG"\)/g) ?? []).toHaveLength(2);
+    expect(hasAbort(testLogger), "no WASM abort").toBe(false);
+  });
+
+  test("remote footprint add creates missing nets and retains board properties", async ({
+    page,
+    testLogger,
+  }) => {
+    await bootOpen(page);
+    const addedId = FP1.replace("66666666", "bbbbbbbb");
+    const added = (await fp1Blob(page))
+      .replaceAll("66666666", "bbbbbbbb")
+      .replace(/\(net (?:1 )?"SIG"\)/g, '(net "REMOTE_ONLY")')
+      .replace("(attr smd)", '(attr smd) (locked yes) (component_classes (class "Power"))');
+    await page.evaluate((sexpr) => {
+      window.Module.kicadCollabApplyItems(
+        JSON.stringify({ added: [{ sexpr }], changed: [], removed: [] }),
+      );
+    }, added);
+    await expect
+      .poll(() => saveRead(page), { timeout: 25000, intervals: [400] })
+      .toContain(addedId);
+
+    const saved = await saveRead(page);
+    expect(saved.match(/\(net "REMOTE_ONLY"\)/g) ?? []).toHaveLength(2);
+    expect(saved.match(/\(net "SIG"\)/g) ?? []).toHaveLength(2);
+    expect(saved).toContain("(locked yes)");
+    expect(saved).toContain('(class "Power")');
+    expect(hasAbort(testLogger), "no WASM abort").toBe(false);
+  });
+
   test("precondition: applyItems removes a root item (harness proof)", async ({
     page,
     testLogger,
